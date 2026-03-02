@@ -764,17 +764,106 @@ body {
 @keyframes toast-out { from { opacity:1; } to { opacity:0; } }
 
 /* ════════════════════════════════
+   COLLAPSIBLE COLUMN ELEMENTS
+   ════════════════════════════════ */
+
+/* Chevron sits inside .col-title; hidden on desktop */
+.col-chevron {
+  display: none;
+  font-size: 0.82rem;
+  margin-left: 6px;
+  opacity: 0.65;
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* Transparent wrapper; on desktop it just stretches like the old .task-list */
+.task-list-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ════════════════════════════════
    RESPONSIVE
    ════════════════════════════════ */
-@media (max-width: 700px) {
+
+/* ── Compact topbar / bottombar on narrow screens ── */
+@media (max-width: 768px) {
   #topbar { padding: 10px 14px; gap: 12px; }
-  #board  { padding: 14px; gap: 14px; }
-  .column { flex: 0 0 280px; }
   #bottombar { padding: 12px 14px; }
   .bottom-inner { gap: 16px; }
   .badges-section { margin-left: 0; }
 }
 
+/* ── Mobile board: vertical stacking + collapsible columns ── */
+@media (max-width: 768px) {
+  #board {
+    flex-direction: column;
+    overflow-x: hidden;
+    padding: 12px;
+    gap: 10px;
+    /* Don't stretch columns — each one controls its own height */
+    align-items: stretch;
+  }
+
+  /* Full-width, auto-height; min-height removed so collapsed state is slim */
+  .column {
+    flex: none;
+    width: 100%;
+    min-height: 0;
+  }
+
+  /* Header becomes a tap-friendly toggle button */
+  .col-header {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    user-select: none;
+  }
+  .col-header:active {
+    background: rgba(124, 106, 255, 0.07);
+  }
+
+  /* Show the chevron on mobile */
+  .col-chevron {
+    display: inline-block;
+  }
+  /* Point left when the column is collapsed */
+  .column.collapsed .col-chevron {
+    transform: rotate(-90deg);
+  }
+
+  /* ── Height animation using grid-template-rows trick ──
+     1fr → 0fr collapses to the content's natural height with no
+     fixed pixel value, so the animation is always smooth.          */
+  .task-list-wrap {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    flex: none; /* override desktop flex: 1 */
+  }
+  .column.collapsed .task-list-wrap {
+    grid-template-rows: 0fr;
+  }
+  /* Required: grid children need min-height: 0 to shrink below natural size */
+  .task-list-wrap > .task-list {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* CSS-only auto-expand: when a drag or tap-select is active over a column,
+     force the task list open so the user can see where they're dropping.
+     drag-over  → set by JS during mouse/touch drag hover
+     tap-target → set by JS when a card is tap-selected (all columns get it)  */
+  .column.drag-over   .task-list-wrap,
+  .column.tap-target  .task-list-wrap {
+    grid-template-rows: 1fr !important;
+  }
+}
+
+/* ── Smallest phones ── */
 @media (max-width: 480px) {
   #add-btn { padding: 7px 12px; font-size: 0.8rem; }
   .stat-pill { min-width: 60px; }
@@ -855,13 +944,16 @@ body {
       <div class="col-title">
         <span class="col-dot"></span>
         To Do
+        <span class="col-chevron" aria-hidden="true">▾</span>
       </div>
       <span class="col-count" id="count-todo">0</span>
     </div>
-    <div class="task-list" id="list-todo" data-col="todo">
-      <div class="empty-state">
-        <span class="icon">📋</span>
-        <span>No quests yet.<br>Add one above!</span>
+    <div class="task-list-wrap">
+      <div class="task-list" id="list-todo" data-col="todo">
+        <div class="empty-state">
+          <span class="icon">📋</span>
+          <span>No quests yet.<br>Add one above!</span>
+        </div>
       </div>
     </div>
   </div>
@@ -872,13 +964,16 @@ body {
       <div class="col-title">
         <span class="col-dot"></span>
         In Progress
+        <span class="col-chevron" aria-hidden="true">▾</span>
       </div>
       <span class="col-count" id="count-inprog">0</span>
     </div>
-    <div class="task-list" id="list-inprog" data-col="inprog">
-      <div class="empty-state">
-        <span class="icon">⚔️</span>
-        <span>Nothing in battle.<br>Drag a quest here!</span>
+    <div class="task-list-wrap">
+      <div class="task-list" id="list-inprog" data-col="inprog">
+        <div class="empty-state">
+          <span class="icon">⚔️</span>
+          <span>Nothing in battle.<br>Drag a quest here!</span>
+        </div>
       </div>
     </div>
   </div>
@@ -889,13 +984,16 @@ body {
       <div class="col-title">
         <span class="col-dot"></span>
         Done
+        <span class="col-chevron" aria-hidden="true">▾</span>
       </div>
       <span class="col-count" id="count-done">0</span>
     </div>
-    <div class="task-list" id="list-done" data-col="done">
-      <div class="empty-state">
-        <span class="icon">🏆</span>
-        <span>Complete quests to<br>earn XP!</span>
+    <div class="task-list-wrap">
+      <div class="task-list" id="list-done" data-col="done">
+        <div class="empty-state">
+          <span class="icon">🏆</span>
+          <span>Complete quests to<br>earn XP!</span>
+        </div>
       </div>
     </div>
   </div>
@@ -1293,6 +1391,9 @@ function moveTask(taskId, newCol) {
   task.col = newCol;
   if (oldCol !== 'done' && newCol === 'done') awardXP(task, rect);
 
+  // On mobile, make sure the destination column is visible after the move
+  if (isMobile()) expandColumn(newCol);
+
   save();
   render();
   if (newCol === 'done') flashCard(task.id, 'done');
@@ -1307,6 +1408,57 @@ function flashCard(taskId, col) {
     card.style.transition = 'background 0.8s ease';
     card.style.background = '';
   });
+}
+
+/* ═══════════════════════════════════════
+   COLLAPSIBLE COLUMNS (mobile ≤ 768 px)
+   ═══════════════════════════════════════ */
+const isMobile = () => window.innerWidth <= 768;
+
+function expandColumn(colId) {
+  document.querySelector(`.column[data-col="${colId}"]`)?.classList.remove('collapsed');
+}
+
+function collapseColumn(colId) {
+  document.querySelector(`.column[data-col="${colId}"]`)?.classList.add('collapsed');
+}
+
+function toggleColumn(col) {
+  col.classList.toggle('collapsed');
+}
+
+let mobileDefaultsApplied = false;
+
+function setupCollapsibleColumns() {
+  // Wire each column header to toggle on mobile
+  document.querySelectorAll('.column').forEach(col => {
+    col.querySelector('.col-header').addEventListener('click', e => {
+      if (!isMobile()) return;
+      // If a card is tap-selected, let the column click handler in
+      // setupColumns handle the move instead of toggling collapse.
+      if (selectedId) return;
+      e.stopPropagation(); // prevent the column's tap-select click handler
+      toggleColumn(col);
+    });
+  });
+
+  function applyDefaults() {
+    if (isMobile()) {
+      if (!mobileDefaultsApplied) {
+        mobileDefaultsApplied = true;
+        // Default: To Do open, In Progress and Done collapsed
+        collapseColumn('inprog');
+        collapseColumn('done');
+      }
+    } else {
+      // On desktop, always show all columns expanded
+      ['todo', 'inprog', 'done'].forEach(expandColumn);
+      mobileDefaultsApplied = false; // reset so next mobile visit gets defaults
+    }
+  }
+
+  applyDefaults();
+  window.addEventListener('resize', applyDefaults, { passive: true });
 }
 
 /* ═══════════════════════════════════════
@@ -1401,12 +1553,15 @@ function onTouchMove(e) {
   touchGhost.style.left = (touch.clientX - touchOffX) + 'px';
   touchGhost.style.top  = (touch.clientY - touchOffY) + 'px';
 
-  // Detect the .task-list under the finger by hiding the ghost temporarily
+  // Detect the column under the finger by hiding the ghost temporarily.
+  // We resolve to the column first (works even when the task-list is
+  // collapsed to 0 height and elementFromPoint lands on the col-header).
   touchGhost.style.visibility = 'hidden';
   const el = document.elementFromPoint(touch.clientX, touch.clientY);
   touchGhost.style.visibility = '';
 
-  const list = el ? el.closest('.task-list') : null;
+  const hoverCol = el ? el.closest('.column') : null;
+  const list     = hoverCol ? hoverCol.querySelector('.task-list') : null;
   if (list !== touchDropList) {
     // Clear old highlight
     if (touchDropList) {
@@ -1756,6 +1911,10 @@ function init() {
 
   // Wire up drag-and-drop on the three columns
   setupColumns();
+
+  // Collapsible columns for mobile (must run after setupColumns so
+  // selectedId is accessible when the header-click handler fires)
+  setupCollapsibleColumns();
 
   // Initial render
   render();
