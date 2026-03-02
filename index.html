@@ -780,6 +780,37 @@ body {
   .stat-pill { min-width: 60px; }
   .diff-options { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ════════════════════════════════
+   TOUCH / TAP-SELECT STATES
+   ════════════════════════════════ */
+
+/* Card selected via tap — glowing ring */
+.task-card.touch-selected {
+  box-shadow: 0 0 0 2px var(--accent), 0 4px 20px rgba(124,106,255,0.4);
+  transform: translateY(-2px);
+}
+
+/* Floating clone that follows the finger during a touch-drag */
+.touch-ghost {
+  position: fixed !important;
+  pointer-events: none !important;
+  z-index: 999;
+  opacity: 0.88;
+  transform: rotate(2deg) scale(1.05);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.65), 0 0 20px rgba(124,106,255,0.35);
+  transition: none !important;
+}
+
+/* Column pulsing outline when a card is tap-selected */
+.column.tap-target {
+  box-shadow: 0 0 0 2px var(--accent2), var(--glow);
+  cursor: pointer;
+}
+.column.tap-target .col-header {
+  background: rgba(124,106,255,0.07);
+  transition: background 0.2s;
+}
 </style>
 </head>
 <body>
@@ -1195,8 +1226,16 @@ function buildCard(task) {
       ${dueHTML}
     </div>`;
 
+  // Mouse drag
   card.addEventListener('dragstart', onDragStart);
   card.addEventListener('dragend',   onDragEnd);
+
+  // Touch drag + tap-select (passive: false on move so we can preventDefault)
+  card.addEventListener('touchstart',  onTouchStart,  { passive: true  });
+  card.addEventListener('touchmove',   onTouchMove,   { passive: false });
+  card.addEventListener('touchend',    onTouchEnd);
+  card.addEventListener('touchcancel', onTouchCancel);
+
   card.querySelector('.edit').addEventListener('click', e => { e.stopPropagation(); openEdit(task.id); });
   card.querySelector('.del').addEventListener('click',  e => { e.stopPropagation(); removeTask(task.id); });
 
@@ -1238,13 +1277,45 @@ function render() {
 }
 
 /* ═══════════════════════════════════════
-   DRAG & DROP
+   SHARED MOVE LOGIC
+   Central function used by mouse drop,
+   touch drop, and tap-select.
+   ═══════════════════════════════════════ */
+function moveTask(taskId, newCol) {
+  const task = S.tasks.find(t => t.id === taskId);
+  if (!task || task.col === newCol) return;
+
+  const oldCol = task.col;
+  // Capture card position before re-render so XP popup lands on the right spot
+  const cardEl = document.querySelector(`.task-card[data-id="${taskId}"]`);
+  const rect   = cardEl ? cardEl.getBoundingClientRect() : null;
+
+  task.col = newCol;
+  if (oldCol !== 'done' && newCol === 'done') awardXP(task, rect);
+
+  save();
+  render();
+  if (newCol === 'done') flashCard(task.id, 'done');
+}
+
+function flashCard(taskId, col) {
+  const card = document.querySelector(`#list-${col} .task-card[data-id="${taskId}"]`);
+  if (!card) return;
+  card.style.transition = 'background 0s';
+  card.style.background = 'rgba(34,197,94,0.28)';
+  requestAnimationFrame(() => {
+    card.style.transition = 'background 0.8s ease';
+    card.style.background = '';
+  });
+}
+
+/* ═══════════════════════════════════════
+   MOUSE DRAG & DROP
    ═══════════════════════════════════════ */
 let draggingId = null;
 
 function onDragStart(e) {
   draggingId = e.currentTarget.dataset.id;
-  // Slight delay so the "ghost" renders before opacity change
   setTimeout(() => e.currentTarget.classList.add('dragging'), 0);
   e.dataTransfer.effectAllowed = 'move';
 }
@@ -1260,65 +1331,232 @@ function clearDragHighlights() {
   });
 }
 
+/* ═══════════════════════════════════════
+   TOUCH DRAG
+   Mirrors the mouse drag UX: move finger
+   >12 px to engage drag; a floating ghost
+   clone follows the finger; drop target is
+   detected via elementFromPoint().
+   ═══════════════════════════════════════ */
+const DRAG_THRESHOLD = 12; // px before drag mode engages
+
+let touchTaskId   = null;  // id of the card being touched
+let touchGhost    = null;  // DOM clone following the finger
+let touchDragging = false; // true once threshold is crossed
+let touchDropList = null;  // .task-list currently under the finger
+let touchStartX   = 0;
+let touchStartY   = 0;
+let touchOffX     = 0;     // finger offset from card's top-left corner
+let touchOffY     = 0;
+
+function onTouchStart(e) {
+  if (e.touches.length !== 1) return;           // ignore multi-touch
+  if (e.target.closest('.task-btn')) return;    // let action buttons fire normally
+
+  const card  = e.currentTarget;
+  const touch = e.touches[0];
+  const rect  = card.getBoundingClientRect();
+
+  touchTaskId   = card.dataset.id;
+  touchDragging = false;
+  touchStartX   = touch.clientX;
+  touchStartY   = touch.clientY;
+  touchOffX     = touch.clientX - rect.left;
+  touchOffY     = touch.clientY - rect.top;
+}
+
+function onTouchMove(e) {
+  if (!touchTaskId) return;
+  if (e.touches.length !== 1) { onTouchCancel(); return; } // multi-touch cancels
+
+  const touch = e.touches[0];
+  const dx    = touch.clientX - touchStartX;
+  const dy    = touch.clientY - touchStartY;
+
+  if (!touchDragging) {
+    if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return; // not far enough yet
+
+    // ── Engage drag ──
+    touchDragging = true;
+    clearTapSelect(); // deselect any tap-selected card
+
+    const card = document.querySelector(`.task-card[data-id="${touchTaskId}"]`);
+    if (card) {
+      card.classList.add('dragging');
+      // Build a ghost clone that trails the finger
+      touchGhost = card.cloneNode(true);
+      touchGhost.classList.add('touch-ghost');
+      touchGhost.style.width = card.offsetWidth + 'px';
+      // Hide the action buttons on the ghost so they don't confuse
+      touchGhost.querySelectorAll('.task-actions').forEach(el => el.style.opacity = '0');
+      document.body.appendChild(touchGhost);
+    }
+  }
+
+  // Prevent page scroll while actively dragging a card
+  e.preventDefault();
+  if (!touchGhost) return;
+
+  // Move ghost to follow the finger
+  touchGhost.style.left = (touch.clientX - touchOffX) + 'px';
+  touchGhost.style.top  = (touch.clientY - touchOffY) + 'px';
+
+  // Detect the .task-list under the finger by hiding the ghost temporarily
+  touchGhost.style.visibility = 'hidden';
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  touchGhost.style.visibility = '';
+
+  const list = el ? el.closest('.task-list') : null;
+  if (list !== touchDropList) {
+    // Clear old highlight
+    if (touchDropList) {
+      touchDropList.classList.remove('drag-target-active');
+      touchDropList.closest('.column').classList.remove('drag-over');
+    }
+    touchDropList = list;
+    // Apply new highlight
+    if (touchDropList) {
+      touchDropList.classList.add('drag-target-active');
+      touchDropList.closest('.column').classList.add('drag-over');
+    }
+  }
+}
+
+function onTouchEnd(e) {
+  if (!touchTaskId) return;
+
+  if (!touchDragging) {
+    // Finger lifted without crossing threshold → it's a tap
+    e.preventDefault(); // stop browser firing a synthetic click
+    const id = touchTaskId;
+    touchTaskId = null;
+    handleTap(id);
+    return;
+  }
+
+  // ── Finish drag ──
+  if (touchGhost) { touchGhost.remove(); touchGhost = null; }
+
+  const card = document.querySelector(`.task-card[data-id="${touchTaskId}"]`);
+  if (card) card.classList.remove('dragging');
+
+  const srcId  = touchTaskId;
+  const target = touchDropList;
+
+  touchTaskId   = null;
+  touchDragging = false;
+  touchDropList = null;
+  clearDragHighlights();
+
+  if (target) moveTask(srcId, target.dataset.col);
+}
+
+function onTouchCancel() {
+  if (touchGhost) { touchGhost.remove(); touchGhost = null; }
+  if (touchTaskId) {
+    const card = document.querySelector(`.task-card[data-id="${touchTaskId}"]`);
+    if (card) card.classList.remove('dragging');
+  }
+  touchTaskId   = null;
+  touchDragging = false;
+  touchDropList = null;
+  clearDragHighlights();
+}
+
+/* ═══════════════════════════════════════
+   TAP-SELECT FALLBACK
+   Short tap on a card selects it (glowing
+   ring). Then tap any column to move it
+   there. Tap the card again to deselect.
+   Tap outside a column to cancel.
+   ═══════════════════════════════════════ */
+let selectedId     = null;
+let tapSelectGuard = false; // blocks the synthetic click browsers fire after touchend
+
+function handleTap(taskId) {
+  // Tapping the already-selected card deselects it
+  if (selectedId === taskId) { clearTapSelect(); return; }
+
+  clearTapSelect();
+  selectedId = taskId;
+
+  const card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+  if (card) card.classList.add('touch-selected');
+
+  // Highlight all columns as drop targets
+  document.querySelectorAll('.column').forEach(c => c.classList.add('tap-target'));
+
+  const task  = S.tasks.find(t => t.id === taskId);
+  const label = task
+    ? `"${task.name.length > 24 ? task.name.slice(0, 24) + '…' : task.name}"`
+    : 'Quest';
+  showToast('👆', `${label} selected — tap a column to move it`);
+
+  // The browser fires a click event ~300 ms after touchend; ignore it so
+  // the document-level deselect handler doesn't immediately clear the selection.
+  tapSelectGuard = true;
+  setTimeout(() => { tapSelectGuard = false; }, 400);
+}
+
+function clearTapSelect() {
+  if (selectedId) {
+    const card = document.querySelector(`.task-card[data-id="${selectedId}"]`);
+    if (card) card.classList.remove('touch-selected');
+  }
+  selectedId = null;
+  document.querySelectorAll('.column').forEach(c => c.classList.remove('tap-target'));
+}
+
+/* ═══════════════════════════════════════
+   COLUMN SETUP
+   Wires mouse drag events, mouse drop,
+   and the column-tap handler for
+   tap-select mode.
+   ═══════════════════════════════════════ */
 function setupColumns() {
   document.querySelectorAll('.task-list').forEach(list => {
+    const column = list.closest('.column');
+
+    // ── Mouse drag-over highlight ──
     list.addEventListener('dragover', e => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       list.classList.add('drag-target-active');
-      list.closest('.column').classList.add('drag-over');
+      column.classList.add('drag-over');
     });
 
     list.addEventListener('dragleave', e => {
-      // Only remove highlight if pointer truly left this list
       if (!list.contains(e.relatedTarget)) {
         list.classList.remove('drag-target-active');
-        list.closest('.column').classList.remove('drag-over');
+        column.classList.remove('drag-over');
       }
     });
 
+    // ── Mouse drop ──
     list.addEventListener('drop', e => {
       e.preventDefault();
       clearDragHighlights();
       if (!draggingId) return;
-
-      const newCol = list.dataset.col;
-      const task   = S.tasks.find(t => t.id === draggingId);
-      if (!task) { draggingId = null; return; }
-
-      const oldCol = task.col;
-      if (oldCol === newCol) { draggingId = null; return; }
-
-      // Capture position BEFORE re-render for XP popup placement
-      const cardEl = document.querySelector(`.task-card[data-id="${draggingId}"]`);
-      const rect   = cardEl ? cardEl.getBoundingClientRect() : null;
-
-      task.col = newCol;
-
-      if (oldCol !== 'done' && newCol === 'done') {
-        awardXP(task, rect);
-      }
-
+      const id = draggingId;
       draggingId = null;
-      save();
-      render();
+      moveTask(id, list.dataset.col);
+    });
 
-      // Brief "landing" flash on the card in its new column
-      if (newCol === 'done') {
-        flashCard(task.id, 'done');
-      }
+    // ── Tap-to-move: column receives the selected card ──
+    column.addEventListener('click', e => {
+      if (!selectedId) return;
+      if (e.target.closest('.task-btn')) return; // let edit/delete through
+      const id = selectedId;
+      clearTapSelect();
+      moveTask(id, list.dataset.col);
     });
   });
-}
 
-function flashCard(taskId, col) {
-  const card = document.querySelector(`#list-${col} .task-card[data-id="${taskId}"]`);
-  if (!card) return;
-  card.style.transition = 'background 0s';
-  card.style.background = 'rgba(34,197,94,0.28)';
-  requestAnimationFrame(() => {
-    card.style.transition = 'background 0.8s ease';
-    card.style.background = '';
+  // Tapping anywhere outside a column clears the tap-selection
+  document.addEventListener('click', e => {
+    if (!selectedId || tapSelectGuard) return;
+    if (e.target.closest('.column')) return;
+    clearTapSelect();
   });
 }
 
